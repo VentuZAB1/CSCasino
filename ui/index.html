@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="page-title">CS Casino</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="casino-container" class="hidden">
+        <!-- Background Effects -->
+        <div class="bg-effects">
+            <!-- Gradient orbs removed to prevent floating purple elements -->
+        </div>
+        
+        <!-- Header -->
+        <header class="casino-header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <i class="fas fa-crown"></i>
+                    <h1>RockFordGingers</h1>
+                </div>
+                
+                <div class="player-info">
+                    <div class="player-stats">
+                        <div class="stat-item">
+                            <i class="fas fa-star"></i>
+                            <span>Level <span id="player-level">1</span></span>
+                        </div>
+                        <div class="stat-item">
+                            <i class="fas fa-bolt"></i>
+                            <span><span id="player-xp">0</span> XP</span>
+                        </div>
+                    </div>
+                    <div class="player-balance">
+                        <i class="fas fa-wallet"></i>
+                        <span>$<span id="player-money">0</span></span>
+                    </div>
+                </div>
+                
+                <button class="close-btn" id="close-casino">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            
+            <!-- XP Progress Bar -->
+            <div class="xp-progress-container">
+                <div class="xp-progress-bar">
+                    <div class="xp-progress-fill" id="xp-progress"></div>
+                    <div class="xp-progress-text">
+                        <span id="xp-current">0</span> / <span id="xp-required">1000</span> XP
+                    </div>
+                </div>
+            </div>
+        </header>
+        
+        <!-- Navigation -->
+        <nav class="casino-nav">
+            <button class="nav-btn active" data-tab="cases">
+                <i class="fas fa-box"></i>
+                <span>Cases</span>
+            </button>
+            <button class="nav-btn" data-tab="inventory">
+                <i class="fas fa-gift"></i>
+                <span>Case Items</span>
+            </button>
+            <button class="nav-btn" data-tab="stats">
+                <i class="fas fa-chart-line"></i>
+                <span>Statistics</span>
+            </button>
+        </nav>
+        
+        <!-- Main Content -->
+        <main class="casino-main">
+            <!-- Cases Tab -->
+            <div class="tab-content active" id="tab-cases">
+                <div class="cases-grid" id="cases-container">
+                    <!-- Cases will be dynamically generated -->
+                </div>
+            </div>
+            
+            <!-- Inventory Tab -->
+            <div class="tab-content" id="tab-inventory">
+                <div class="inventory-grid" id="inventory-container">
+                    <!-- Sellable items will be dynamically generated -->
+                </div>
+            </div>
+            
+            <!-- Statistics Tab -->
+            <div class="tab-content" id="tab-stats">
+                <div class="stats-container">
+                    <div class="stats-card">
+                        <h3>Your Statistics</h3>
+                        <div class="stats-grid">
+                            <div class="stat-box">
+                                <i class="fas fa-box-open"></i>
+                                <span class="stat-value" id="total-cases">0</span>
+                                <span class="stat-label">Cases Opened</span>
+                            </div>
+                            <div class="stat-box">
+                                <i class="fas fa-dollar-sign"></i>
+                                <span class="stat-value" id="total-spent">$0</span>
+                                <span class="stat-label">Total Spent</span>
+                            </div>
+                            <div class="stat-box">
+                                <i class="fas fa-trophy"></i>
+                                <span class="stat-value" id="current-level">1</span>
+                                <span class="stat-label">Current Level</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="history-card">
+                        <h3>Recent Activity</h3>
+                        <div class="history-list" id="history-container">
+                            <!-- History will be dynamically generated -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <!-- Case Opening Modal -->
+        <div class="case-opening-modal hidden" id="case-opening-modal">
+            <div class="modal-content">
+                <h2 id="opening-text" style="color: white; margin-bottom: 20px;">Opening Case...</h2>
+                <div class="case-animation">
+                    <div class="rolling-items" id="rolling-items">
+                        <!-- Rolling items will be generated dynamically -->
+                    </div>
+                </div>
+                <div class="item-reveal hidden" id="item-reveal">
+                    <div class="item-icon">
+                        <i class="fas fa-gift"></i>
+                    </div>
+                    <div class="item-name" id="revealed-item-name"></div>
+                    <div class="item-amount" id="revealed-item-amount"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Case Preview Modal -->
+        <div class="case-preview-modal hidden" id="case-preview-modal">
+            <div class="preview-modal-content">
+                <div class="preview-header">
+                    <div class="preview-case-icon">
+                        <i class="fas fa-box"></i>
+                    </div>
+                    <div class="preview-case-info">
+                        <h2 id="preview-case-name">Case Name</h2>
+                        <p id="preview-case-description">Case description</p>
+                        <div class="preview-case-price">$<span id="preview-case-price">0</span></div>
+                    </div>
+                    <button class="preview-close-btn" id="preview-close-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <div class="preview-content">
+                    <h3>Case Contents</h3>
+                    <div class="preview-items-container" id="preview-items-container">
+                        <!-- Items will be dynamically generated -->
+                    </div>
+                    
+                    <div class="preview-footer">
+                        <div class="preview-total-chance">
+                            <span>Total Items: <span id="preview-total-items">0</span></span>
+                        </div>
+                        <button class="preview-open-case-btn" id="preview-open-case-btn">
+                            <i class="fas fa-dice"></i>
+                            Open Case
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Level Up Modal (moved inside casino container) -->
+        <div class="level-up-modal hidden" id="level-up-modal">
+            <div class="level-up-content">
+                <div class="level-up-icon">
+                    <i class="fas fa-star"></i>
+                </div>
+                <h2>LEVEL UP!</h2>
+                <p>You reached level <span id="new-level">2</span>!</p>
+                <button class="level-up-close">Continue</button>
+            </div>
+        </div>
+        
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
