@@ -191,6 +191,7 @@ Config.Security = {
         ['cs-casino:server:sellItem'] = 15,      -- Max 15 item sells per minute
         ['cs-casino:server:keepPendingItem'] = 20,
         ['cs-casino:server:sellPendingItem'] = 20,
+        ['cs-casino:server:finalizeCase'] = 25,  -- Max 25 case finalizations per minute
     },
     
     -- Input validation settings
@@ -208,36 +209,55 @@ Config.Security = {
         enabled = true,                 -- Enable security logging
         logAttempts = true,             -- Log attempted exploits
         logValidActions = false,        -- Log valid actions (for debugging)
-        webhookUrl = 'https://discord.com/api/webhooks/1404673996276109422/KlobH4jGyMHveSwQ0R0QUgskr7UiHqO64uIAAJ9p_gvnO9VR_avMb-hQOVMFgiCi2I0T',                -- Discord webhook URL for security alerts
+        -- NOTE: Discord webhook URL is now configured in server/main.lua at the top
         webhookEnabled = true,          -- Enable/disable webhook notifications
         webhookOnWarnings = true,       -- Send warnings to webhook
         webhookOnErrors = true,         -- Send errors to webhook
         webhookOnBans = true,           -- Send ban notifications to webhook
+        
+        -- Enhanced Discord alert settings
+        discordAlerts = {
+            enabled = true,                     -- Enable enhanced Discord security alerts
+            criticalViolations = true,          -- Send critical security violations
+            rateLimitViolations = true,         -- Send rate limit violations  
+            invalidDataAttempts = true,         -- Send invalid data structure attempts
+            invalidCaseTypes = true,            -- Send invalid case type attempts
+            invalidRewardIds = true,            -- Send invalid reward ID attempts
+            invalidActions = true,              -- Send invalid action attempts
+            successfulTransactions = false,    -- Send successful case finalizations (can be spammy)
+            playerBans = true,                  -- Send player ban notifications
+            
+            -- Alert filtering
+            minimumSeverity = 'WARNING',        -- Minimum severity: INFO, WARNING, CRITICAL
+            rateLimitCooldown = 300,           -- Seconds between similar alerts (prevents spam)
+            maxAlertsPerHour = 50,             -- Maximum alerts per hour to prevent spam
+        }
     }
 }
 
 --[[
     Discord Webhook Setup Instructions:
     
+    ** IMPORTANT: Discord webhook URL is now configured in server/main.lua at the top **
+    
     1. Create a Discord channel for casino security alerts
     2. Go to Channel Settings > Integrations > Webhooks
     3. Click "Create Webhook"
     4. Copy the webhook URL
-    5. Paste it in Config.Security.logging.webhookUrl
+    5. Open server/main.lua and find DISCORD_WEBHOOK_URL at the top
+    6. Replace the URL with your webhook URL
+    7. Save and restart the resource
     
     Example webhook URL format:
     https://discord.com/api/webhooks/1234567890123456789/AbCdEfGhIjKlMnOpQrStUvWxYz1234567890
     
-    The webhook will send:
-    - 🟡 Warnings: Rate limits, invalid inputs
-    - 🔴 Errors: Exploit attempts, invalid case types
-    - ⚫ Bans: Players banned for excessive spam
+    The webhook will send enhanced security alerts:
+    - 🔴 Critical: Invalid reward IDs, fake case types
+    - 🟡 Warnings: Invalid data, malformed parameters
+    - 🟠 Rate Limits: Players exceeding limits
+    - ⚫ Bans: Players banned for spam
     
-    Each alert includes:
-    - Player name and ID
-    - Player license identifier
-    - Timestamp and server info
-    - Detailed security violation
+    Each alert includes detailed player info, violation details, and context.
 --]]
 
 -- Level System
@@ -249,7 +269,7 @@ Config.LevelSystem = {
 
 -- Case Types and Pricing
 Config.Cases = {
-    ['bronze_case'] = {
+    ['Bronze Case'] = {
         name = 'Bronze Case',
         description = 'Basic tier case with common FiveM items',
         price = 100,
@@ -263,7 +283,7 @@ Config.Cases = {
             {item = 'radio', weight = 5, min = 1, max = 1}
         }
     },
-    ['silver_case'] = {
+    ['Silver Case'] = {
         name = 'Silver Case',
         description = 'Medium tier case with uncommon items',
         price = 250,
@@ -278,7 +298,7 @@ Config.Cases = {
             {item = 'gps', weight = 10, min = 1, max = 1}
         }
     },
-    ['gold_case'] = {
+    ['Gold Case'] = {
         name = 'Gold Case',
         description = 'High tier case with rare items',
         price = 500,
@@ -295,7 +315,7 @@ Config.Cases = {
             {item = 'diamond', weight = 5, min = 1, max = 1}
         }
     },
-    ['platinum_case'] = {
+    ['Platinum Case'] = {
         name = 'Platinum Case',
         description = 'Premium tier case with legendary items',
         price = 1000,

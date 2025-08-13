@@ -31,6 +31,25 @@ class CSCasino {
         }
     }
 
+    // Helper function to format case names (backward compatibility)
+    formatCaseName(caseType) {
+        if (!caseType || typeof caseType !== 'string') return caseType;
+        
+        // Convert underscore format to proper case format for display
+        return caseType
+            .replace(/_/g, ' ')  // Replace underscores with spaces
+            .replace(/\b\w/g, l => l.toUpperCase());  // Capitalize first letter of each word
+    }
+
+    // Helper function to normalize case names for server communication
+    normalizeCaseNameForServer(caseType) {
+        if (!caseType || typeof caseType !== 'string') return caseType;
+        
+        // For new system, send clean names as-is
+        // Server will handle backward compatibility
+        return caseType;
+    }
+
     showCasePreview(caseType, caseData) {
         this.debugLog('userInteractions', 'Showing case preview for: ' + caseType);
         
@@ -678,7 +697,7 @@ class CSCasino {
         openingText.textContent = `Determining ${caseType} result...`;
         
         // Call server to get the actual winning item
-        this.post('openCase', { caseType });
+        this.post('openCase', { caseType: this.normalizeCaseNameForServer(caseType) });
     }
 
     // Handle cooldown status updates from client
@@ -925,14 +944,17 @@ class CSCasino {
         }
         
         if (result.success) {
-            // Store the winning item result (but don't give it to player yet)
+            // Store the winning item result for display (secure system - display data only)
             this.winningItem = {
-                name: result.item,
-                amount: result.amount,
+                name: result.displayItem,  // Only for display, can't be exploited
+                amount: result.displayAmount,  // Only for display, can't be exploited
                 label: result.itemLabel,
                 sellValue: result.sellValue,
                 caseType: this.currentCaseType
             };
+            
+            // Store the secure reward ID for finalization
+            this.secureRewardId = result.rewardId;
             
             // Store the case opening result for later use
             this.pendingResult = result;
@@ -980,15 +1002,15 @@ class CSCasino {
         itemName.textContent = winningItem.label || this.formatItemName(winningItem.name);
         itemAmount.textContent = `x${winningItem.amount}`;
         
-        // Create single button to proceed
+        // Create Keep button only - selling happens in Sell Items tab
         const buttonsContainer = document.createElement('div');
         buttonsContainer.className = 'choice-buttons';
         buttonsContainer.style.opacity = '0'; // Start invisible
         buttonsContainer.style.pointerEvents = 'none'; // Disable clicks initially
         buttonsContainer.style.transform = 'translateY(20px)'; // Start slightly below
         buttonsContainer.innerHTML = `
-            <button class="choice-btn keep-btn" id="collect-btn">
-                <i class="fas fa-check"></i>
+            <button class="choice-btn keep-btn" id="keep-btn">
+                <i class="fas fa-backpack"></i>
                 ${this.titles.caseOpening?.collectButton || 'Collect Item'}
             </button>
         `;
@@ -997,8 +1019,8 @@ class CSCasino {
         itemReveal.appendChild(buttonsContainer);
         itemReveal.classList.remove('hidden');
         
-        // Add click handler
-        document.getElementById('collect-btn').addEventListener('click', () => this.collectItem());
+        // Add click handler for keep only
+        document.getElementById('keep-btn').addEventListener('click', () => this.finalizeCase('keep'));
         
         // Show button with animation after a short delay
         setTimeout(() => {
@@ -1009,25 +1031,22 @@ class CSCasino {
         }, 100); // Reduced delay for faster appearance
     }
 
-    collectItem() {
+    finalizeCase(action) {
         // Prevent multiple clicks
         if (this.isCollecting) return;
         this.isCollecting = true;
         
-        // Disable the collect button
-        const collectBtn = document.getElementById('collect-btn');
-        if (collectBtn) {
-            collectBtn.disabled = true;
-            collectBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${this.titles.caseOpening?.collecting || 'Collecting...'}`;
+        // Disable the keep button
+        const keepBtn = document.getElementById('keep-btn');
+        if (keepBtn) {
+            keepBtn.disabled = true;
+            keepBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${this.titles.caseOpening?.collecting || 'Collecting...'}`;
         }
         
-        // Add item to the pending items (shown in Sell Items tab)
-        this.post('collectItem', { 
-            caseType: this.winningItem.caseType,
-            item: this.winningItem.name,
-            amount: this.winningItem.amount,
-            sellValue: this.winningItem.sellValue,
-            itemLabel: this.winningItem.label
+        // Send secure finalization request using reward ID (always 'keep' from case opening)
+        this.post('finalizeCase', { 
+            action: 'keep',  // Always keep from case opening - selling happens in Sell Items tab
+            rewardId: this.secureRewardId  // Secure ID from server
         });
         
         this.finalizeCaseOpening();

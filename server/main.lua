@@ -1,6 +1,29 @@
 -- CS Casino Server Main File
 -- QBox Framework Integration
 
+-- ==========================================
+-- DISCORD WEBHOOK CONFIGURATION
+-- ==========================================
+-- 🚨 IMPORTANT: Change this URL to your Discord webhook for security alerts!
+-- 
+-- To get a webhook URL:
+-- 1. Go to your Discord server settings
+-- 2. Go to Integrations > Webhooks  
+-- 3. Create New Webhook or edit existing one
+-- 4. Copy the Webhook URL and paste it below (replace the entire URL)
+-- 5. Save this file and restart the resource
+--
+-- ⚠️  WARNING: Keep this URL private! Anyone with this URL can send messages to your Discord channel.
+--
+-- To disable Discord alerts: Set webhookEnabled = false in config.lua
+-- To test Discord alerts: Use command "casino:testdiscord" in server console
+--
+local DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1404673996276109422/KlobH4jGyMHveSwQ0R0QUgskr7UiHqO64uIAAJ9p_gvnO9VR_avMb-hQOVMFgiCi2I0T'
+
+-- ==========================================
+-- DO NOT MODIFY BELOW THIS LINE
+-- ==========================================
+
 -- Debug helper function
 local function debugPrint(category, message)
     if not Config.Debug.enabled then return end
@@ -13,6 +36,83 @@ end
 -- Security System
 local playerEventCounts = {}
 local playerCooldowns = {}
+
+-- Secure Reward System - Pre-defined rewards on server only
+local activeRewards = {} -- Stores temporary reward data indexed by secure ID
+local rewardIdCounter = 0 -- Counter for generating unique reward IDs
+
+-- Helper function to generate secure reward ID and store reward data
+local function CreateSecureReward(citizenid, item, amount, caseType)
+    rewardIdCounter = rewardIdCounter + 1
+    local rewardId = citizenid .. '_' .. os.time() .. '_' .. rewardIdCounter
+    
+    -- Store reward securely on server
+    activeRewards[rewardId] = {
+        citizenid = citizenid,
+        item = item,
+        amount = amount,
+        caseType = caseType,
+        created = os.time(),
+        used = false
+    }
+    
+    debugPrint('security', 'Created secure reward ID: ' .. rewardId .. ' for ' .. amount .. 'x ' .. item)
+    return rewardId
+end
+
+-- Helper function to validate and consume reward
+local function ValidateAndConsumeReward(rewardId, citizenid)
+    local reward = activeRewards[rewardId]
+    
+    if not reward then
+        debugPrint('security', 'Invalid reward ID: ' .. tostring(rewardId))
+        return nil, 'Invalid reward ID'
+    end
+    
+    if reward.citizenid ~= citizenid then
+        debugPrint('security', 'Reward ID ' .. rewardId .. ' does not belong to citizenid: ' .. citizenid)
+        return nil, 'Reward does not belong to player'
+    end
+    
+    if reward.used then
+        debugPrint('security', 'Reward ID ' .. rewardId .. ' already used')
+        return nil, 'Reward already used'
+    end
+    
+    -- Check if reward is too old (30 minutes max)
+    if os.time() - reward.created > 1800 then
+        debugPrint('security', 'Reward ID ' .. rewardId .. ' expired')
+        activeRewards[rewardId] = nil
+        return nil, 'Reward expired'
+    end
+    
+    -- Mark as used and return reward data
+    reward.used = true
+    debugPrint('security', 'Validated and consumed reward ID: ' .. rewardId)
+    return reward, nil
+end
+
+-- Cleanup old rewards periodically
+CreateThread(function()
+    while true do
+        local currentTime = os.time()
+        local cleanedCount = 0
+        
+        for rewardId, reward in pairs(activeRewards) do
+            -- Clean up rewards older than 30 minutes or already used
+            if reward.used or (currentTime - reward.created > 1800) then
+                activeRewards[rewardId] = nil
+                cleanedCount = cleanedCount + 1
+            end
+        end
+        
+        if cleanedCount > 0 then
+            debugPrint('security', 'Cleaned up ' .. cleanedCount .. ' old/used rewards')
+        end
+        
+        Wait(300000) -- Clean every 5 minutes
+    end
+end)
 
 -- Clean up player data on disconnect
 AddEventHandler('playerDropped', function()
@@ -113,7 +213,20 @@ local function checkRateLimit(src, eventName)
             local playerData = getPlayerDataForWebhook(src, Player)
             
             -- Log ban with webhook
-            securityLog('Player banned for excessive spam (' .. eventData.count .. ' events in 1 minute)', 'ban', playerData)
+            securityLog('🚨 Player banned for excessive spam (' .. eventData.count .. ' events in 1 minute)', 'ban', playerData)
+            
+            -- Send Discord alert for player ban
+            if Config.Security.logging.discordAlerts.playerBans then
+                sendSecurityAlert('⚫ **PLAYER BANNED** ⚫', {
+                    violation = 'Excessive Spam',
+                    description = 'Player banned for sending too many events in a short time period',
+                    severity = 'CRITICAL',
+                    action = eventName,
+                    playerData = playerData,
+                    timestamp = os.date('%Y-%m-%d %H:%M:%S'),
+                    error = 'Event count: ' .. eventData.count .. ' in 1 minute (threshold: ' .. Config.Security.spamThreshold .. ')'
+                })
+            end
             
             DropPlayer(src, Config.Titles.security.banMessage)
         end
@@ -142,9 +255,48 @@ local function validateInput(data, expectedType, maxLength)
     return true
 end
 
+-- Helper functions for case name formatting and compatibility
+local function NormalizeCaseName(caseType)
+    -- Convert old underscore format to new clean format for backward compatibility
+    if type(caseType) ~= 'string' then return caseType end
+    
+    -- Convert underscore format to proper case format
+    local cleanName = caseType:gsub('_', ' ')
+    
+    -- Capitalize first letter of each word
+    cleanName = cleanName:gsub("(%a)([%w_']*)", function(first, rest)
+        return first:upper() .. rest:lower()
+    end)
+    
+    return cleanName
+end
+
+local function GetCaseData(caseType)
+    -- First try to find the case with the exact key
+    if Config.Cases[caseType] then
+        return Config.Cases[caseType]
+    end
+    
+    -- If not found, try with normalized name (backward compatibility)
+    local normalizedName = NormalizeCaseName(caseType)
+    if Config.Cases[normalizedName] then
+        return Config.Cases[normalizedName]
+    end
+    
+    -- If still not found, try the old underscore format
+    local underscoreName = caseType:gsub(' ', '_'):lower()
+    for key, data in pairs(Config.Cases) do
+        if key:gsub(' ', '_'):lower() == underscoreName then
+            return data
+        end
+    end
+    
+    return nil
+end
+
 local function validateCaseType(caseType)
     if not Config.Security.validation.allowedCaseTypes then return true end
-    return Config.Cases[caseType] ~= nil
+    return GetCaseData(caseType) ~= nil
 end
 
 local function validatePlayerPosition(src)
@@ -178,8 +330,206 @@ local function validatePlayerPosition(src)
     return false
 end
 
+-- Alert rate limiting to prevent spam
+local discordAlertCooldowns = {}
+local hourlyAlertCount = 0
+local lastHourReset = os.time()
+
+-- Enhanced Discord security alert function
+local function sendSecurityAlert(title, alertData)
+    local webhookUrl = DISCORD_WEBHOOK_URL
+    if not webhookUrl or webhookUrl == '' or not Config.Security.logging.webhookEnabled then 
+        return 
+    end
+    
+    -- Check if enhanced Discord alerts are enabled
+    if not Config.Security.logging.discordAlerts.enabled then
+        return
+    end
+    
+    -- Check severity filtering
+    local severityLevels = { INFO = 1, WARNING = 2, CRITICAL = 3 }
+    local minSeverity = severityLevels[Config.Security.logging.discordAlerts.minimumSeverity] or 2
+    local alertSeverity = severityLevels[alertData.severity] or 1
+    
+    if alertSeverity < minSeverity then
+        debugPrint('security', 'Alert filtered out due to severity: ' .. (alertData.severity or 'UNKNOWN'))
+        return
+    end
+    
+    -- Check specific alert type configuration
+    local alertType = alertData.violation or 'unknown'
+    local shouldSend = false
+    
+    -- Always allow test alerts to bypass filtering
+    if alertType == 'Test Alert' then
+        shouldSend = true
+    elseif alertType:find('Rate Limit') and Config.Security.logging.discordAlerts.rateLimitViolations then
+        shouldSend = true
+    elseif alertType:find('Invalid Data') and Config.Security.logging.discordAlerts.invalidDataAttempts then
+        shouldSend = true
+    elseif alertType:find('Invalid Case Type') and Config.Security.logging.discordAlerts.invalidCaseTypes then
+        shouldSend = true
+    elseif alertType:find('Invalid Reward ID') and Config.Security.logging.discordAlerts.invalidRewardIds then
+        shouldSend = true
+    elseif alertType:find('Invalid Action') and Config.Security.logging.discordAlerts.invalidActions then
+        shouldSend = true
+    elseif alertData.severity == 'CRITICAL' and Config.Security.logging.discordAlerts.criticalViolations then
+        shouldSend = true
+    end
+    
+    if not shouldSend then
+        debugPrint('security', 'Alert type filtered out: ' .. alertType)
+        return
+    end
+    
+    -- Get current time for all rate limiting checks
+    local currentTime = os.time()
+    
+    -- Rate limiting for similar alerts (skip for test alerts)
+    if alertType ~= 'Test Alert' then
+        local cooldownKey = (alertData.playerData and alertData.playerData.source or 'unknown') .. '_' .. alertType
+        
+        if discordAlertCooldowns[cooldownKey] and 
+           (currentTime - discordAlertCooldowns[cooldownKey]) < Config.Security.logging.discordAlerts.rateLimitCooldown then
+            debugPrint('security', 'Alert rate limited for: ' .. cooldownKey)
+            return
+        end
+        
+        discordAlertCooldowns[cooldownKey] = currentTime
+    end
+    
+    -- Hourly alert limit check (skip for test alerts)
+    if alertType ~= 'Test Alert' then
+        if currentTime - lastHourReset >= 3600 then
+            hourlyAlertCount = 0
+            lastHourReset = currentTime
+        end
+        
+        if hourlyAlertCount >= Config.Security.logging.discordAlerts.maxAlertsPerHour then
+            debugPrint('security', 'Hourly alert limit reached, skipping alert')
+            return
+        end
+        
+        hourlyAlertCount = hourlyAlertCount + 1
+    end
+    
+    -- Color based on severity
+    local color = 16711680 -- Red for critical
+    if alertData.severity == 'WARNING' then
+        color = 16776960 -- Yellow
+    elseif alertData.severity == 'INFO' then
+        color = 65280 -- Green
+    elseif alertData.severity == 'CRITICAL' then
+        color = 9961472 -- Dark red
+    end
+    
+    -- Build detailed embed
+    local embed = {
+        {
+            title = title,
+            description = alertData.description or 'Security violation detected',
+            color = color,
+            timestamp = os.date('%Y-%m-%dT%H:%M:%S') .. 'Z',
+            footer = {
+                text = alertData.serverInfo or GetConvar('sv_hostname', 'CS Casino Server'),
+                icon_url = 'https://cdn.discordapp.com/emojis/938441025096626207.png'
+            },
+            fields = {}
+        }
+    }
+    
+    -- Add player information
+    if alertData.playerData then
+        table.insert(embed[1].fields, {
+            name = '👤 Player Information',
+            value = string.format('**Name:** %s\n**ID:** %s\n**License:** %s\n**CitizenID:** %s',
+                alertData.playerData.name or 'Unknown',
+                alertData.playerData.source or 'Unknown',
+                alertData.playerData.license or 'Unknown',
+                alertData.playerData.citizenid or 'Unknown'
+            ),
+            inline = false
+        })
+    end
+    
+    -- Add violation details
+    if alertData.violation then
+        table.insert(embed[1].fields, {
+            name = '⚠️ Violation Type',
+            value = alertData.violation,
+            inline = true
+        })
+    end
+    
+    if alertData.action then
+        table.insert(embed[1].fields, {
+            name = '🎯 Attempted Action',
+            value = alertData.action,
+            inline = true
+        })
+    end
+    
+    if alertData.severity then
+        table.insert(embed[1].fields, {
+            name = '🚨 Severity Level',
+            value = alertData.severity,
+            inline = true
+        })
+    end
+    
+    -- Add specific violation data
+    if alertData.rewardId then
+        table.insert(embed[1].fields, {
+            name = '🔑 Reward ID',
+            value = '`' .. alertData.rewardId .. '`',
+            inline = false
+        })
+    end
+    
+    if alertData.error then
+        table.insert(embed[1].fields, {
+            name = '❌ Error Details',
+            value = '`' .. alertData.error .. '`',
+            inline = false
+        })
+    end
+    
+    if alertData.invalidData then
+        table.insert(embed[1].fields, {
+            name = '💀 Invalid Data Sent',
+            value = '```json\n' .. json.encode(alertData.invalidData) .. '\n```',
+            inline = false
+        })
+    end
+    
+    -- Add timestamp
+    table.insert(embed[1].fields, {
+        name = '🕒 Timestamp',
+        value = alertData.timestamp or os.date('%Y-%m-%d %H:%M:%S'),
+        inline = true
+    })
+    
+    local payload = {
+        username = Config.Titles.security.webhookUsername .. ' - Security Alert',
+        avatar_url = 'https://cdn.discordapp.com/emojis/938441025096626207.png',
+        embeds = embed
+    }
+    
+    -- Send webhook
+    PerformHttpRequest(webhookUrl, function(statusCode, response, headers)
+        if statusCode ~= 204 then
+            print('^1[CS Casino Security] ^7Failed to send Discord security alert. Status: ' .. statusCode)
+        else
+            debugPrint('security', 'Discord security alert sent successfully')
+        end
+    end, 'POST', json.encode(payload), {
+        ['Content-Type'] = 'application/json'
+    })
+end
+
 local function sendDiscordWebhook(message, level, playerData)
-    local webhookUrl = Config.Security.logging.webhookUrl
+    local webhookUrl = DISCORD_WEBHOOK_URL
     if not webhookUrl or webhookUrl == '' then return end
     
     -- Color based on alert level
@@ -286,9 +636,11 @@ local function securityLog(message, level, playerData)
     end
 end
 
+
+
 -- Helper function to get random weighted item from case
 local function GetRandomItemFromCase(caseType)
-    local caseData = Config.Cases[caseType]
+    local caseData = GetCaseData(caseType)
     if not caseData then return nil end
     
     local totalWeight = 0
@@ -583,9 +935,23 @@ RegisterNetEvent('cs-casino:server:openCase', function(caseType)
         local playerData = {
             name = Player.PlayerData.name,
             source = src,
-            license = Player.PlayerData.license
+            license = Player.PlayerData.license,
+            citizenid = Player.PlayerData.citizenid
         }
-        securityLog('Attempted to open invalid case type: ' .. caseType, 'error', playerData)
+        securityLog('🚨 Attempted to open invalid case type: ' .. caseType, 'error', playerData)
+        
+        -- Send Discord alert for invalid case type
+        sendSecurityAlert('🔴 **SECURITY VIOLATION** 🔴', {
+            violation = 'Invalid Case Type',
+            description = 'Player attempted to open non-existent case type',
+            invalidData = { caseType = caseType },
+            severity = 'CRITICAL',
+            action = 'openCase',
+            playerData = playerData,
+            timestamp = os.date('%Y-%m-%d %H:%M:%S'),
+            error = 'Case type not found in server configuration'
+        })
+        
         TriggerClientEvent('ox_lib:notify', src, {
             type = 'error',
             description = Config.Titles.notifications.invalidCase
@@ -593,9 +959,23 @@ RegisterNetEvent('cs-casino:server:openCase', function(caseType)
         return
     end
     
-    local caseData = Config.Cases[caseType]
+    local caseData = GetCaseData(caseType)
+    if not caseData then
+        TriggerClientEvent('ox_lib:notify', src, {
+            type = 'error',
+            description = Config.Titles.notifications.invalidCase
+        })
+        return
+    end
     
     local playerData = GetPlayerData(Player.PlayerData.citizenid)
+    if not playerData then
+        TriggerClientEvent('ox_lib:notify', src, {
+            type = 'error',
+            description = Config.Titles.notifications.errorOccurred
+        })
+        return
+    end
     
     -- Check level requirement
     if playerData.level < caseData.requiredLevel then
@@ -637,7 +1017,8 @@ RegisterNetEvent('cs-casino:server:openCase', function(caseType)
         return
     end
     
-    -- Don't give item immediately - wait for player choice (Keep/Sell)
+    -- Create secure reward ID instead of sending raw item data
+    local rewardId = CreateSecureReward(Player.PlayerData.citizenid, wonItem.item, wonItem.amount, caseType)
     
     -- Update player stats and experience
     UpdatePlayerStats(Player.PlayerData.citizenid, caseData.price)
@@ -651,16 +1032,18 @@ RegisterNetEvent('cs-casino:server:openCase', function(caseType)
     local itemLabel = itemData and itemData.label or wonItem.item
     local sellValue = GetItemSellValue(wonItem.item, wonItem.amount)
     
-    -- Send result to client (item not given yet)
+    -- Send result to client with SECURE reward ID only (no raw item data)
     TriggerClientEvent('cs-casino:client:caseOpened', src, {
         success = true,
-        item = wonItem.item,
-        amount = wonItem.amount,
+        rewardId = rewardId,  -- Secure ID instead of raw item data
         itemLabel = itemLabel,
         sellValue = sellValue,
         caseType = caseType,
         levelData = levelData,
-        newPlayerData = GetPlayerData(Player.PlayerData.citizenid)
+        newPlayerData = GetPlayerData(Player.PlayerData.citizenid),
+        -- NOTE: No item/amount sent to client for security
+        displayItem = wonItem.item,  -- Only for display purposes (can't be exploited)
+        displayAmount = wonItem.amount  -- Only for display purposes (can't be exploited)
     })
     
     -- Level up notification
@@ -675,58 +1058,26 @@ RegisterNetEvent('cs-casino:server:openCase', function(caseType)
     debugPrint('playerActions', Player.PlayerData.name .. ' opened ' .. caseType .. ' and won ' .. wonItem.amount .. 'x ' .. wonItem.item .. ' (pending choice)')
 end)
 
--- Event: Finalize case opening (Keep or Sell)
+-- Event: Finalize case opening (Keep or Sell) - SECURE VERSION
 RegisterNetEvent('cs-casino:server:finalizeCase', function(data)
-    local src = source
-    local Player = exports.qbx_core:GetPlayer(src)
-    
-    if not Player then return end
-    
-    local action = data.action -- 'keep' or 'sell'
-    local item = data.item
-    local amount = data.amount
-    
-    if action == 'keep' then
-        -- Give item to player
-        local success = exports.ox_inventory:AddItem(src, item, amount)
-        if success then
-            TriggerClientEvent('ox_lib:notify', src, {
-                type = 'success',
-                description = Config.Titles.notifications.itemKept
-            })
-            
-            debugPrint('playerActions', Player.PlayerData.name .. ' kept ' .. amount .. 'x ' .. item)
-        else
-            TriggerClientEvent('ox_lib:notify', src, {
-                type = 'error',
-                description = Config.Titles.notifications.errorOccurred
-            })
-        end
-        
-    elseif action == 'sell' then
-        -- Give money with +3% margin
-        local sellValue = data.sellValue
-        exports.qbx_core:AddMoney(src, Config.Currency, sellValue, 'cs-casino-item-sell')
-        
-        -- Add to sell history
-        AddSellHistory(Player.PlayerData.citizenid, item, amount, sellValue)
-        
-        TriggerClientEvent('ox_lib:notify', src, {
-            type = 'success',
-            description = Config.Titles.notifications.itemSold:gsub('{amount}', sellValue)
-        })
-        
-        debugPrint('playerActions', Player.PlayerData.name .. ' sold ' .. amount .. 'x ' .. item .. ' for $' .. sellValue)
-    end
-end)
-
--- Event: Collect item from case (add to pending items)
-RegisterNetEvent('cs-casino:server:collectItem', function(data)
     local src = source
     
     -- Security checks
-    if not checkRateLimit(src, 'cs-casino:server:collectItem') then
-        securityLog('Player ' .. src .. ' rate limited on collectItem', 'warning')
+    if not checkRateLimit(src, 'cs-casino:server:finalizeCase') then
+        local Player = exports.qbx_core:GetPlayer(src)
+        local playerData = Player and getPlayerDataForWebhook(src, Player) or { source = src }
+        securityLog('🚨 Rate limit exceeded on finalizeCase', 'warning', playerData)
+        
+        -- Send Discord alert for rate limiting
+        sendSecurityAlert('🟠 **RATE LIMIT VIOLATION** 🟠', {
+            violation = 'Rate Limit Exceeded',
+            description = 'Player exceeded rate limit for finalizeCase events',
+            severity = 'WARNING',
+            action = 'finalizeCase',
+            playerData = playerData,
+            timestamp = os.date('%Y-%m-%d %H:%M:%S'),
+            error = 'Too many requests in short time period'
+        })
         return
     end
     
@@ -735,38 +1086,126 @@ RegisterNetEvent('cs-casino:server:collectItem', function(data)
     
     -- Input validation
     if not validateInput(data, 'table') then
-        securityLog('Player ' .. src .. ' sent invalid collectItem data', 'error')
+        local playerData = getPlayerDataForWebhook(src, Player)
+        securityLog('🚨 Invalid data sent to finalizeCase', 'error', playerData)
+        
+        -- Send Discord alert for invalid data
+        sendSecurityAlert('🟡 **SECURITY WARNING** 🟡', {
+            violation = 'Invalid Data Structure',
+            description = 'Player sent invalid data structure to finalizeCase event',
+            invalidData = data,
+            severity = 'WARNING',
+            action = 'finalizeCase',
+            playerData = playerData,
+            timestamp = os.date('%Y-%m-%d %H:%M:%S')
+        })
         return
     end
     
-    if not validateInput(data.item, 'string', 50) or 
-       not validateInput(data.amount, 'number') or 
-       not validateInput(data.sellValue, 'number') or
-       not validateInput(data.itemLabel, 'string', 100) or
-       not validateInput(data.caseType, 'string', 50) then
-        securityLog('Player ' .. src .. ' sent invalid collectItem parameters', 'error')
+    local action = data.action -- 'keep' or 'sell'
+    local rewardId = data.rewardId -- Secure reward ID
+    
+    -- Validate action (only 'keep' allowed from case opening)
+    if not validateInput(action, 'string', 10) or action ~= 'keep' then
+        local playerData = getPlayerDataForWebhook(src, Player)
+        securityLog('🚨 Invalid action sent to finalizeCase: ' .. tostring(action), 'error', playerData)
+        
+        -- Send Discord alert for invalid action
+        sendSecurityAlert('🟡 **SECURITY WARNING** 🟡', {
+            violation = 'Invalid Action Parameter',
+            description = 'Player sent invalid action to finalizeCase (expected: keep only)',
+            invalidData = { action = action, rewardId = rewardId },
+            severity = 'WARNING',
+            action = 'finalizeCase',
+            playerData = playerData,
+            timestamp = os.date('%Y-%m-%d %H:%M:%S')
+        })
         return
     end
     
-    -- Validate case type exists
-    if not validateCaseType(data.caseType) then
-        securityLog('Player ' .. src .. ' attempted to collect item with invalid case type: ' .. tostring(data.caseType), 'error')
+    -- Validate reward ID
+    if not validateInput(rewardId, 'string', 100) then
+        local playerData = getPlayerDataForWebhook(src, Player)
+        securityLog('🚨 Invalid rewardId sent to finalizeCase: ' .. tostring(rewardId), 'error', playerData)
+        
+        -- Send Discord alert for invalid reward ID format
+        sendSecurityAlert('🟡 **SECURITY WARNING** 🟡', {
+            violation = 'Invalid Reward ID Format',
+            description = 'Player sent malformed reward ID to finalizeCase',
+            invalidData = { rewardId = rewardId, action = action },
+            severity = 'WARNING',
+            action = 'finalizeCase',
+            playerData = playerData,
+            timestamp = os.date('%Y-%m-%d %H:%M:%S')
+        })
         return
     end
+    
+    -- Validate and consume the secure reward
+    local reward, error = ValidateAndConsumeReward(rewardId, Player.PlayerData.citizenid)
+    if not reward then
+        local playerData = getPlayerDataForWebhook(src, Player)
+        securityLog('🚨 CRITICAL: Failed to validate reward ID ' .. tostring(rewardId) .. ': ' .. (error or 'Unknown error'), 'error', playerData)
+        
+        -- Send detailed Discord alert for reward validation failure
+        sendSecurityAlert('🔴 **CRITICAL SECURITY VIOLATION** 🔴', {
+            violation = 'Invalid Reward ID Usage',
+            description = 'Player attempted to use invalid/expired/unauthorized reward ID',
+            rewardId = tostring(rewardId),
+            error = error or 'Unknown error',
+            severity = 'CRITICAL',
+            action = 'finalizeCase',
+            playerData = playerData,
+            timestamp = os.date('%Y-%m-%d %H:%M:%S'),
+            serverInfo = GetConvar('sv_hostname', 'FiveM Server')
+        })
+        
+        TriggerClientEvent('ox_lib:notify', src, {
+            type = 'error',
+            description = Config.Titles.notifications.securityViolation
+        })
+        return
+    end
+    
+    local item = reward.item
+    local amount = reward.amount
+    
+    -- Add item to pending items (Case Items tab) - not directly to inventory
+    local itemData = exports.ox_inventory:Items(item)
+    local itemLabel = itemData and itemData.label or item
+    local sellValue = GetItemSellValue(item, amount)
     
     -- Generate unique ID for the pending item
     local itemId = src .. '_' .. os.time() .. '_' .. math.random(1000, 9999)
     
-    -- Store item in database
-    AddPendingItem(Player.PlayerData.citizenid, itemId, data.item, data.amount, data.sellValue, data.itemLabel, data.caseType)
+    -- Store item in pending items database
+    AddPendingItem(Player.PlayerData.citizenid, itemId, item, amount, sellValue, itemLabel, reward.caseType)
     
     TriggerClientEvent('ox_lib:notify', src, {
         type = 'success',
         description = Config.Titles.notifications.caseOpened
     })
     
-    debugPrint('playerActions', Player.PlayerData.name .. ' collected ' .. data.amount .. 'x ' .. data.item .. ' (pending in database)')
+    debugPrint('playerActions', Player.PlayerData.name .. ' added ' .. amount .. 'x ' .. item .. ' to Case Items (pending)')
+    
+    -- Refresh the Case Items tab if they have it open
+    local pendingItems = GetPendingItems(Player.PlayerData.citizenid)
+    local items = {}
+    for _, pendingItem in pairs(pendingItems) do
+        table.insert(items, {
+            id = pendingItem.id,
+            name = pendingItem.item_name,
+            amount = pendingItem.item_amount,
+            sellValue = pendingItem.sell_value,
+            label = pendingItem.item_label,
+            caseType = pendingItem.case_type
+        })
+    end
+    TriggerClientEvent('cs-casino:client:pendingItems', src, { items = items })
 end)
+
+-- OLD collectItem event removed for security - replaced with secure finalizeCase system
+-- This prevents clients from sending arbitrary item data to the server
 
 -- Event: Get pending items
 RegisterNetEvent('cs-casino:server:getPendingItems', function()
@@ -1055,6 +1494,81 @@ RegisterNetEvent('cs-casino:server:getSellableItems', function()
     
     TriggerClientEvent('cs-casino:client:receiveSellableItems', src, sellableItems)
 end)
+
+-- Admin command to test Discord alerts
+RegisterCommand('casino:testdiscord', function(source, args, rawCommand)
+    local src = source
+    
+    -- Only allow from console
+    if src ~= 0 then
+        print('^1[CS Casino Security] ^7This command can only be run from console')
+        return
+    end
+    
+    print('^3[CS Casino Security] ^7Sending test Discord alert...')
+    print('^3[CS Casino Security] ^7Webhook URL: ' .. (DISCORD_WEBHOOK_URL and 'Configured' or 'NOT SET'))
+    print('^3[CS Casino Security] ^7Webhook Enabled: ' .. (Config.Security.logging.webhookEnabled and 'YES' or 'NO'))
+    print('^3[CS Casino Security] ^7Discord Alerts Enabled: ' .. (Config.Security.logging.discordAlerts.enabled and 'YES' or 'NO'))
+    
+    -- Send test alert (using WARNING severity to bypass filtering)
+    sendSecurityAlert('🧪 **TEST ALERT** 🧪', {
+        violation = 'Test Alert',
+        description = 'This is a test alert to verify Discord webhook integration',
+        severity = 'WARNING',  -- Changed to WARNING to bypass minimum severity filter
+        action = 'testDiscord',
+        playerData = {
+            name = 'Test Player',
+            source = 'console',
+            license = 'test_license',
+            citizenid = 'test_citizen'
+        },
+        timestamp = os.date('%Y-%m-%d %H:%M:%S'),
+        error = 'This is not a real error - just testing!'
+    })
+    
+    print('^2[CS Casino Security] ^7Test alert sent! Check your Discord channel.')
+    print('^2[CS Casino Security] ^7If you don\'t receive the alert, check:')
+    print('^2[CS Casino Security] ^7  1. Webhook URL is correct in server/main.lua')
+    print('^2[CS Casino Security] ^7  2. webhookEnabled = true in config.lua')
+    print('^2[CS Casino Security] ^7  3. discordAlerts.enabled = true in config.lua')
+end, true)
+
+-- Admin command to test security system
+RegisterCommand('casino:testsecurity', function(source, args, rawCommand)
+    local src = source
+    
+    -- Only allow from console
+    if src ~= 0 then
+        print('^1[CS Casino Security] ^7This command can only be run from console')
+        return
+    end
+    
+    print('^3[CS Casino Security] ^7=== SECURITY SYSTEM STATUS ===')
+    
+    -- Count active rewards manually since it's a dictionary
+    local rewardCount = 0
+    for _ in pairs(activeRewards) do
+        rewardCount = rewardCount + 1
+    end
+    
+    print('^2[CS Casino Security] ^7Active Rewards: ' .. rewardCount)
+    print('^2[CS Casino Security] ^7Rate Limiting: ' .. (Config.Security.enableRateLimiting and 'ENABLED' or 'DISABLED'))
+    print('^2[CS Casino Security] ^7Input Validation: ' .. (Config.Security.validation.allowedCaseTypes and 'ENABLED' or 'DISABLED'))
+    print('^2[CS Casino Security] ^7Discord Logging: ' .. (Config.Security.logging.webhookEnabled and 'ENABLED' or 'DISABLED'))
+    
+    if rewardCount > 0 then
+        print('^3[CS Casino Security] ^7Recent Active Rewards:')
+        local count = 0
+        for rewardId, reward in pairs(activeRewards) do
+            if count >= 5 then break end -- Show max 5
+            print(string.format('^6[CS Casino Security] ^7  %s: %dx %s (used: %s)', 
+                rewardId, reward.amount, reward.item, reward.used and 'YES' or 'NO'))
+            count = count + 1
+        end
+    end
+    
+    print('^3[CS Casino Security] ^7=== END STATUS ===')
+end, true)
 
 -- Admin command to fix all player levels
 RegisterCommand('casino:fixlevels', function(source, args, rawCommand)
